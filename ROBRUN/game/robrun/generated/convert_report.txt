@@ -1,0 +1,7 @@
+source: Z:\Making DMA\MAKING DMA ROB RUN\Il2CppDumper-unity6\output\dump.cs
+prefixes: (all non-blocked)
+types: 17341
+offset types: 15729
+enums: 1612
+instance fields: 75075
+enum members: 11100

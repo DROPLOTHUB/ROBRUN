@@ -850,7 +850,8 @@ namespace robrun
                     << " scatter_runs/s=" << static_cast<int>(runs_s)
                     << " posBad=" << pos_bad << " boundsOk=" << bounds_ok
                     << " groundOk=" << ground_ok << " local=" << local_seen
-                    << " skelOk=" << skel_ok << " bones=" << bones_total);
+                    << " skelOk=" << skel_ok << " bones=" << bones_total
+                    << " skelFar=" << w.ent_skel_far);
             w.update_ms_peak = 0.0;
             w.update_ms_sum = 0.0;
             w.update_count = 0;

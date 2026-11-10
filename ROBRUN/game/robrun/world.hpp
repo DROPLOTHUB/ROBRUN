@@ -442,6 +442,8 @@ namespace robrun
         std::uint32_t ent_scatter_pos_ok = 0;
         mutable std::uint32_t ent_chain_rejects = 0;  // build_chain rejections this update
         std::uint32_t ent_pos_misses = 0;     // chains that fell through to stale
+        std::uint32_t ent_skel_far = 0;       // rig root farther than 2.5 m from body
+        mutable std::uint64_t uskel_far_log_tick = 0;
         mutable std::uint32_t pos_fallback_calls = 0;
         // Diagnostics noise control: report each model's missing/empty
         // gameplay SkeletonModel only once per session. The Unity-rig path is
@@ -715,6 +717,10 @@ namespace robrun
             std::uint64_t resolve_tick = 0;
             std::uint64_t resolve_fail_tick = 0;
             bool bound = false;
+            int fail_stage = -1;              // last resolve_uskel gate that rejected
+            int dbg_anchor = -3;              // slot of CharacterMovementView capsule
+            std::uintptr_t dbg_mv = 0, dbg_av = 0, dbg_wv = 0;
+            float dbg_dist = -1.f;            // closest solved bone to entity pos
 
             std::uintptr_t hierarchy = 0;
             std::uintptr_t records = 0;
@@ -792,8 +798,13 @@ namespace robrun
         std::uint64_t view_tick = 0;
         std::uintptr_t view_dict = 0;
         std::int32_t view_count = -1;
+        // Ids drawn last refresh (name + last-seen tick), to explain characters
+        // that disappear (e.g. when a player gets into a vehicle).
+        std::unordered_map<int, std::pair<std::string, std::uint64_t>> last_entity_ids;
         std::unordered_map<std::uintptr_t, uskel_view> uskel_cache;
         std::uint64_t uskel_log_tick = 0;
+        std::uint64_t uskel_fail_log_tick = 0;
+        int uskel_stage_fail[11]{};        // per-gate reject counts, reset each summary
         std::uint64_t chain_frame = 0;
         std::uintptr_t game_instance = 0;      // cached Game root (heap-scan result)
         std::uintptr_t klass_world = 0;
@@ -2814,6 +2825,10 @@ namespace robrun
         b = uskel_view{};
         if (!obj_ptr(view)) return false;
 
+        // Records which gate rejected this view so the log can explain why a
+        // character has no skeleton.
+        auto fail = [&](int stage) { b.fail_stage = stage; return false; };
+
         constexpr int kMaxArrayBones = 6;
 
         // ---- A: view -> sub views ------------------------------------------
@@ -2830,7 +2845,8 @@ namespace robrun
             sb.add(view + off::BattleCharacterEntityView::HeadAdaptation, head_ad);
             sb.run();
         }
-        if (!obj_ptr(mv) && !obj_ptr(av) && !obj_ptr(wv)) return false;
+        b.dbg_mv = mv; b.dbg_av = av; b.dbg_wv = wv;
+        if (!obj_ptr(mv) && !obj_ptr(av) && !obj_ptr(wv)) return fail(1);
 
         // ---- B: sub views -> bone holders ----------------------------------
         std::uintptr_t root_tf = 0, head_view = 0, torso_view = 0;
@@ -2897,7 +2913,9 @@ namespace robrun
                 sb.add(head_ad + off::HeadAdaptationManualBehavior::Root, named[5]);
                 sb.add(head_ad + off::HeadAdaptationManualBehavior::BoneTarget, named[6]);
             }
-            if (obj_ptr(head_pos)) named[7] = head_pos;
+            // HeadPosition (0xE8) is an aim/camera point, not a rig bone: it
+            // sits above the head and drew the long center spike above the box.
+            // The real head bone comes from CharacterHeadManualControlView.
             for (int i = 4; i < 9; ++i)
             {
                 if (!obj_ptr(ikv[i])) continue;
@@ -2939,7 +2957,10 @@ namespace robrun
             slots[nslots++] = t;
         };
         for (int i = 0; i < 7; ++i) push_slot(tf[i]);
-        for (int i = 0; i < 8; ++i) push_slot(named[i]);
+        // Adaptation behaviours (spine/neck/head) duplicate rig bones, and when
+        // their transforms differ they add a floating center line through the
+        // body. The real bones above already cover those segments.
+        // for (int i = 0; i < 7; ++i) push_slot(named[i]);
         for (int i = 0; i < 9; ++i)
         {
             if (!obj_ptr(arrays[i])) continue;
@@ -2948,7 +2969,7 @@ namespace robrun
             if (n > kMaxArrayBones) n = kMaxArrayBones;
             for (int k = 0; k < n; ++k) push_slot(hdrs[i].refs[k]);
         }
-        if (nslots < 4) return false;
+        if (nslots < 4) return fail(2);
 
         // ---- E: managed Transform -> {hierarchy, index} --------------------
         struct native_ref
@@ -2990,7 +3011,7 @@ namespace robrun
                 if (nr[k].hier == nr[i].hier) ++c;
             if (c > best) { best = c; hier = nr[i].hier; }
         }
-        if (!hier || best < 4) return false;
+        if (!hier || best < 4) return fail(3);
 
         std::uintptr_t records = 0, parents = 0;
         {
@@ -2999,7 +3020,7 @@ namespace robrun
             sb.add(hier + unity_native::Hierarchy_Parents, parents);
             sb.run();
         }
-        if (!obj_ptr(records) || !obj_ptr(parents)) return false;
+        if (!obj_ptr(records) || !obj_ptr(parents)) return fail(4);
 
         b.node.fill(-1);
         b.edge.fill(-2);
@@ -3014,7 +3035,7 @@ namespace robrun
             lo = (std::min)(lo, static_cast<int>(nr[i].idx));
             hi = (std::max)(hi, static_cast<int>(nr[i].idx));
         }
-        if (used < 4 || hi < 0) return false;
+        if (used < 4 || hi < 0) return fail(5);
 
         // The same transform can appear in more than one IK chain (e.g. the
         // neck); keep exactly one slot per hierarchy node.
@@ -3033,7 +3054,7 @@ namespace robrun
         for (int attempt = 0; attempt < 6; ++attempt)
         {
             const int span = hi - lo + 1;
-            if (span <= 0 || span > 4096) return false;
+            if (span <= 0 || span > 4096) return fail(6);
             rec.resize(static_cast<std::size_t>(span) * unity_native::Record_Stride);
             par.resize(static_cast<std::size_t>(span));
 
@@ -3056,7 +3077,7 @@ namespace robrun
             }
             if (!changed) { converged = true; break; }
         }
-        if (!converged) return false;
+        if (!converged) return fail(7);
 
         b.hierarchy = hier;
         b.records = records;
@@ -3109,10 +3130,17 @@ namespace robrun
                 for (int i = 0; i < b.slots; ++i)
                     if (b.edge[i] == anchor_slot) b.edge[i] = -2;
             }
+            b.dbg_anchor = anchor_slot;
         }
 
         compute_uskel(b, epos);
-        if (!b.valid) return false;
+        if (!b.valid)
+        {
+            // Characters the game is not rendering are parked at a sentinel
+            // position far above the map. They have no skeleton to draw.
+            if (b.root_pos.finite() && b.root_pos.y > 5000.f) return fail(10);
+            return fail(8);
+        }
 
         b.bound = true;
         b.resolve_tick = GetTickCount64();
@@ -3140,6 +3168,7 @@ namespace robrun
         std::vector<uskel_node_world> w(static_cast<std::size_t>(span));
         int near_count = 0, total = 0;
         const bool have_ref = epos.finite() && !epos.zero();
+        float best_dist = -1.f;
 
         for (int i = 0; i < b.slots; ++i)
         {
@@ -3157,6 +3186,11 @@ namespace robrun
             b.bone_parent[i] = b.edge[i];
             ++total;
             if (!have_ref || nw.pos.distance(epos) < 6.f) ++near_count;
+            if (have_ref)
+            {
+                const float d = nw.pos.distance(epos);
+                if (best_dist < 0.f || d < best_dist) best_dist = d;
+            }
         }
 
         b.root_pos = b.bones[0];
@@ -3177,7 +3211,7 @@ namespace robrun
                 const vec3& p = b.bones[i];
                 const float dx = p.x - epos.x, dz = p.z - epos.z;
                 const float dh = std::sqrt(dx * dx + dz * dz);
-                if (dh > 2.2f || p.y < epos.y - 0.8f || p.y > epos.y + 3.2f)
+                if (dh > 1.9f || p.y < epos.y - 0.7f || p.y > epos.y + 2.15f)
                 {
                     b.bone_parent[i] = -2;
                     b.bones[i] = vec3{};
@@ -3198,13 +3232,13 @@ namespace robrun
             b.bone_parent[i] = static_cast<std::int16_t>(par);
         }
 
-        // A humanoid limb segment is never longer than ~1.5 m; anything more
-        // is a broken link, not a bone.
+        // A humanoid bone segment is never longer than ~1.1 m; anything more
+        // is a broken link (e.g. an arm joined to a leg), not a bone.
         for (int i = 0; i < b.slots; ++i)
         {
             const int par = b.bone_parent[i];
             if (par < 0) continue;
-            if (b.bones[i].distance(b.bones[static_cast<std::size_t>(par)]) > 1.6f)
+            if (b.bones[i].distance(b.bones[static_cast<std::size_t>(par)]) > 1.15f)
                 b.bone_parent[i] = -2;
         }
 
@@ -3213,6 +3247,7 @@ namespace robrun
         // scattered/NaN transforms and fails here.
         b.valid = total >= 4 && near_count * 3 >= total;
         b.count = b.slots;
+        b.dbg_dist = best_dist;
     }
 
     inline bool world::read_character(std::uintptr_t model, entity& out) const
@@ -3409,8 +3444,19 @@ namespace robrun
                     << " cache=" << uskel_cache.size()
                     << " bound=" << bound << " valid=" << valid
                     << " bones=" << bones
+                    << " failA=" << uskel_stage_fail[1]
+                    << " failSlots=" << uskel_stage_fail[2]
+                    << " failHier=" << uskel_stage_fail[3]
+                    << " failHdr=" << uskel_stage_fail[4]
+                    << " failUsed=" << uskel_stage_fail[5]
+                    << " failSpan=" << uskel_stage_fail[6]
+                    << " failConv=" << uskel_stage_fail[7]
+                    << " failPos=" << uskel_stage_fail[8]
+                    << " failRun=" << uskel_stage_fail[9]
+                    << " failParked=" << uskel_stage_fail[10]
                     << " updater=0x" << std::hex << battle_updater
                     << std::dec);
+            for (int& v : uskel_stage_fail) v = 0;
         }
 
         struct due_item
@@ -3435,21 +3481,103 @@ namespace robrun
             if (!b.bound)
             {
                 if (b.resolve_fail_tick &&
-                    now_tick - b.resolve_fail_tick < 3000ull)
+                    now_tick - b.resolve_fail_tick
+                        < (b.fail_stage == 10 ? 10000ull : 3000ull))
                     continue;
                 if (!resolve_uskel(view, epos, b))
                 {
-                    b.resolve_fail_tick = now_tick;
-                    if (cfg.verbose && now_tick - uskel_log_tick >= 30000ull)
+                    // Duplicate chains can carry the same entity id at
+                    // different positions (client copy vs stale/server copy).
+                    // If the solved rig matches one of those copies, resolve
+                    // against that position instead of rejecting the rig.
+                    bool recovered = false;
+                    if (b.fail_stage == 8 && b.root_pos.finite()
+                        && !b.root_pos.zero())
                     {
-                        uskel_log_tick = now_tick;
-                        ROBRUN_LOG("[robrun] uskel: bind failed view=0x"
-                                << std::hex << view << std::dec
-                                << " id=" << c.id);
+                        for (const auto& okv : chain_cache)
+                        {
+                            if (okv.second.id != c.id) continue;
+                            vec3 alt = okv.second.last_pos;
+                            if (!alt.finite() || alt.zero()) continue;
+                            if (alt.distance(b.root_pos) > 6.f) continue;
+                            if (alt.distance(epos) < 1.f) continue;
+                            if (resolve_uskel(view, alt, b))
+                            {
+                                epos = alt;
+                                recovered = true;
+                                break;
+                            }
+                        }
                     }
-                    continue;
+                    if (recovered)
+                    {
+                        b.resolve_fail_tick = 0;
+                    }
+                    else
+                    {
+                    if (b.fail_stage >= 0 && b.fail_stage < 11)
+                        ++uskel_stage_fail[b.fail_stage];
+                    b.resolve_fail_tick = now_tick;
+                    if (cfg.verbose && b.fail_stage != 10
+                        && now_tick - uskel_fail_log_tick >= 500ull)
+                    {
+                        uskel_fail_log_tick = now_tick;
+                        int near_id = -1;
+                        float near_d = -1.f;
+                        if (b.fail_stage == 8 && b.root_pos.finite()
+                            && !b.root_pos.zero())
+                        {
+                            for (const auto& okv : chain_cache)
+                            {
+                                const vec3 op = okv.second.last_pos;
+                                if (!op.finite() || op.zero()) continue;
+                                const float od = op.distance(b.root_pos);
+                                if (near_d < 0.f || od < near_d)
+                                {
+                                    near_d = od;
+                                    near_id = okv.second.id;
+                                }
+                            }
+                        }
+                        ROBRUN_LOG("[robrun] uskel fail stage=" << b.fail_stage
+                                << " view=0x" << std::hex << view << std::dec
+                                << " id=" << c.id
+                                << " mv=0x" << std::hex << b.dbg_mv
+                                << " av=0x" << b.dbg_av
+                                << " wv=0x" << b.dbg_wv << std::dec
+                                << " dist=" << b.dbg_dist
+                                << " nearId=" << near_id
+                                << " nearD=" << near_d
+                                << " root=(" << b.root_pos.x << ","
+                                << b.root_pos.y << "," << b.root_pos.z << ")"
+                                << " pos=(" << epos.x << "," << epos.y
+                                << "," << epos.z << ")");
+                    }
+                        continue;
+                    }
                 }
                 b.resolve_fail_tick = 0;
+            }
+
+            // A rig bound before the character had a position was accepted as
+            // a wildcard. Once a real position is known, check the rig actually
+            // sits on that body; otherwise the skeleton would float elsewhere.
+            if (b.bound && epos.finite() && !epos.zero() && b.root_pos.finite()
+                && !b.root_pos.zero() && b.root_pos.y < 5000.f)
+            {
+                const float d = b.root_pos.distance(epos);
+                if (d > 6.f && cfg.verbose
+                    && now_tick - uskel_far_log_tick >= 2000ull)
+                {
+                    uskel_far_log_tick = now_tick;
+                    ROBRUN_LOG("[robrun] uskel far d=" << d
+                            << " view=0x" << std::hex << view << std::dec
+                            << " id=" << c.id
+                            << " root=(" << b.root_pos.x << "," << b.root_pos.y
+                            << "," << b.root_pos.z << ")"
+                            << " pos=(" << epos.x << "," << epos.y
+                            << "," << epos.z << ")");
+                }
             }
 
             if (b.tick == 0 || now_tick - b.tick >= 33ull)
@@ -3483,6 +3611,7 @@ namespace robrun
                 if (!d.b->valid)
                 {
                     d.b->bound = false;
+                    d.b->fail_stage = 9;
                     d.b->resolve_fail_tick = now_tick;
                 }
             }
@@ -3501,6 +3630,7 @@ namespace robrun
         const std::uint64_t rq_start = sc_.requests_total;
         const double sc_start = sc_.run_ms_total;
         pos_fallback_calls = 0;
+        ent_skel_far = 0;
 
         // Shared fallback body size (PhysicsCharacterConfigs.Default). Cached
         // for 30 s; used for characters that never expose a capsule.
@@ -4561,18 +4691,28 @@ namespace robrun
                     const vec3 slide = pos - b.root_pos;
                     const bool slide_ok = b.root_pos.finite() && !b.root_pos.zero()
                         && slide.dot(slide) < (2.5f * 2.5f);
-                    for (int k = 0; k < n; ++k)
+                    if (!slide_ok)
                     {
-                        vec3 p = b.bones[static_cast<std::size_t>(k)];
-                        if (slide_ok && p.finite() && !p.zero()) p += slide;
-                        e.bones[static_cast<std::size_t>(k)] = p;
-                        e.bone_parent[static_cast<std::size_t>(k)] = b.bone_parent[static_cast<std::size_t>(k)];
+                        // The same id also exists as a stale/server copy at a
+                        // different position. The rig does not belong to this
+                        // body; let the copy that matches it draw the skeleton.
+                        ++ent_skel_far;
                     }
-                    e.bone_count = n;
-                    e.bone_root = -1;
-                    e.skeleton_anchor = vec3{ pos.x, e.box_bottom, pos.z };
-                    e.skeleton_valid = true;
-                    used_unity = true;
+                    else
+                    {
+                        for (int k = 0; k < n; ++k)
+                        {
+                            vec3 p = b.bones[static_cast<std::size_t>(k)];
+                            if (p.finite() && !p.zero()) p += slide;
+                            e.bones[static_cast<std::size_t>(k)] = p;
+                            e.bone_parent[static_cast<std::size_t>(k)] = b.bone_parent[static_cast<std::size_t>(k)];
+                        }
+                        e.bone_count = n;
+                        e.bone_root = -1;
+                        e.skeleton_anchor = vec3{ pos.x, e.box_bottom, pos.z };
+                        e.skeleton_valid = true;
+                        used_unity = true;
+                    }
                 }
 
                 if (!used_unity && c.skel_valid && c.skel_pose_valid)
@@ -4601,6 +4741,39 @@ namespace robrun
             {
                 if (live.find(it->first) == live.end()) it = chain_cache.erase(it);
                 else ++it;
+            }
+        }
+
+        // Characters that were drawn last refresh but are gone now. A player
+        // getting into a vehicle is the usual reason; the log names the id so
+        // we can see whether the model/view/position or the draw filter lost
+        // them.
+        {
+            int announced = 0;
+            std::unordered_set<int> now_ids;
+            now_ids.reserve(entities.size());
+            for (const auto& e : entities) now_ids.insert(e.id);
+            for (auto it = last_entity_ids.begin(); it != last_entity_ids.end(); )
+            {
+                if (now_ids.count(it->first))
+                {
+                    it->second.second = now_tick;
+                    ++it;
+                    continue;
+                }
+                if (now_tick - it->second.second < 2000ull) { ++it; continue; }
+                if (announced++ < 4)
+                    ROBRUN_LOG("[robrun] ent gone id=" << it->first
+                            << " name=" << it->second.first
+                            << " rej=" << ent_chain_rejects
+                            << " miss=" << ent_pos_misses);
+                it = last_entity_ids.erase(it);
+            }
+            for (const auto& e : entities)
+            {
+                auto& slot = last_entity_ids[e.id];
+                slot.first = e.name;
+                if (slot.second == 0) slot.second = now_tick;
             }
         }
 

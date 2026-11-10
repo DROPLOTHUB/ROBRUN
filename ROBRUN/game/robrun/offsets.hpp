@@ -89,54 +89,54 @@ namespace robrun
     namespace rva
     {
         // --- goals -----------------------------------------------------------
-        constexpr uptr WorldEntitiesModel_TypeInfo            = 0x819B280; // TypeDef 3335
-        constexpr uptr BattleEntitiesModel_TypeInfo           = 0x81BCF30; // TypeDef 5510
-        constexpr uptr BattleModel_TypeInfo                   = 0x81C0888; // TypeDef 5520
-        constexpr uptr BattleEntitiesUpdater_TypeInfo         = 0x81BD3F8; // TypeDef 5517
+        constexpr uptr WorldEntitiesModel_TypeInfo            = 0x81A0200; // TypeDef 3335
+        constexpr uptr BattleEntitiesModel_TypeInfo           = 0x81C2048; // TypeDef 5509
+        constexpr uptr BattleModel_TypeInfo                   = 0x81C59A0; // TypeDef 5520
+        constexpr uptr BattleEntitiesUpdater_TypeInfo         = 0x81C2510; // TypeDef 5513
 
         // --- carriers --------------------------------------------------------
-        constexpr uptr BattleScreenUpdater_TypeInfo           = 0x81C8CC8; // TypeDef 5538
-        constexpr uptr BattleScreenFactory_TypeInfo           = 0x81C8998; // TypeDef 5536
-        constexpr uptr Game_Game_TypeInfo                     = 0x812DE18; // TypeDef 29330
-        constexpr uptr GlobalDebugUpdater_TypeInfo            = 0x8135930; // TypeDef 10733
-        constexpr uptr BattleCharacterModel_TypeInfo          = 0x81B7928; // TypeDef 4309
-        constexpr uptr PlayerBattleModel_TypeInfo             = 0x81F0148; // TypeDef 3695
-        constexpr uptr BattleCharacterEntityModel_TypeInfo    = 0x81B6608; // TypeDef 9036
-        constexpr uptr PlayerEntityModel_TypeInfo             = 0x81F3238; // TypeDef 8692
-        constexpr uptr BattleCameraModel_TypeInfo             = 0x81B3C98; // TypeDef 7868
+        constexpr uptr BattleScreenUpdater_TypeInfo           = 0x81CDDE0; // TypeDef 5538
+        constexpr uptr BattleScreenFactory_TypeInfo           = 0x81CDAB0; // TypeDef 5533
+        constexpr uptr Game_Game_TypeInfo                     = 0x8132E80; // TypeDef 29333
+        constexpr uptr GlobalDebugUpdater_TypeInfo            = 0x813A998; // TypeDef 10737
+        constexpr uptr BattleCharacterModel_TypeInfo          = 0x81BCA40; // TypeDef 4309
+        constexpr uptr PlayerBattleModel_TypeInfo             = 0x81F52A8; // TypeDef 3695
+        constexpr uptr BattleCharacterEntityModel_TypeInfo    = 0x81BB720; // TypeDef 9036
+        constexpr uptr PlayerEntityModel_TypeInfo             = 0x81F8398; // TypeDef 8692
+        constexpr uptr BattleCameraModel_TypeInfo             = 0x81B8DB8; // TypeDef 7868
 
         // --- model internals -------------------------------------------------
-        constexpr uptr HealthModel_TypeInfo                   = 0x814AC68; // TypeDef 3919
-        constexpr uptr SkeletonModel_TypeInfo                 = 0x81B9B28; // TypeDef 3485
-        constexpr uptr TransformModel_TypeInfo                = 0x812A878; // TypeDef 3428
-        constexpr uptr CharacterReplicatedTransform_TypeInfo  = 0x813A128; // TypeDef 4097
-        constexpr uptr BattleCharacterData_TypeInfo           = 0x81B62D8; // TypeDef 4889
-        constexpr uptr BattleCharacterCommonData_TypeInfo     = 0x81B57B0; // TypeDef 4888
-        constexpr uptr BattleCharacterPrivateData_TypeInfo    = 0x81B7F80; // TypeDef 4891
-        constexpr uptr BattleCharacterPrivateModel_TypeInfo   = 0x81B8118; // TypeDef 4298
-        constexpr uptr PositionModel_TypeInfo                  = 0x8109428; // TypeDef 3626
-        constexpr uptr CharacterCenterPositionModel_TypeInfo  = 0x8127BB8; // TypeDef 4111
-        constexpr uptr PlayerBattleData_TypeInfo               = 0x81EFFB8; // TypeDef 4989
+        constexpr uptr HealthModel_TypeInfo                   = 0x814FD18; // TypeDef 3919
+        constexpr uptr SkeletonModel_TypeInfo                 = 0x81BEC48; // TypeDef 3485
+        constexpr uptr TransformModel_TypeInfo                = 0x812F750; // TypeDef 3428
+        constexpr uptr CharacterReplicatedTransform_TypeInfo  = 0x813F190; // TypeDef 4097
+        constexpr uptr BattleCharacterData_TypeInfo           = 0x81BB3F0; // TypeDef 4889
+        constexpr uptr BattleCharacterCommonData_TypeInfo     = 0x81BA8D0; // TypeDef 4888
+        constexpr uptr BattleCharacterPrivateData_TypeInfo    = 0x81BD0A0; // TypeDef 4890
+        constexpr uptr BattleCharacterPrivateModel_TypeInfo   = 0x81BD238; // TypeDef 4298
+        constexpr uptr PositionModel_TypeInfo                  = 0x810E490; // TypeDef 3626
+        constexpr uptr CharacterCenterPositionModel_TypeInfo  = 0x812CC20; // TypeDef 4111
+        constexpr uptr PlayerBattleData_TypeInfo               = 0x81F5118; // TypeDef 4988
 
         // --- statics / roots -------------------------------------------------
-        constexpr uptr SoundEventBus_TypeInfo                 = 0x81CCD18; // TypeDef 35341
-        constexpr uptr ContentContext_TypeInfo                = 0x818D2D8; // TypeDef 36302
-        constexpr uptr DebugUtils_TypeInfo                    = 0x81C93B0; // TypeDef 5773
-        constexpr uptr Application_TypeInfo                   = 0x8195CF0; // TypeDef 16971
-        constexpr uptr SceneManager_TypeInfo                  = 0x8184B68; // TypeDef 17458
-        constexpr uptr Debug_TypeInfo                          = 0x81C4F28; // TypeDef 17008
-        constexpr uptr PlayerInputManager_TypeInfo            = 0x81F5CC8; // TypeDef 21134
-        constexpr uptr CinemachineCore_TypeInfo               = 0x814AD78; // TypeDef 29610
-        constexpr uptr CinemachineBrain_TypeInfo               = 0x814AA48; // TypeDef 29513
-        constexpr uptr MulticastDelegate_TypeInfo              = 0x8174FC0;
-        constexpr uptr Delegate_TypeInfo                       = 0x81D7790;
+        constexpr uptr SoundEventBus_TypeInfo                 = 0x81D1E30; // TypeDef 35345
+        constexpr uptr ContentContext_TypeInfo                = 0x8192588; // TypeDef 36308
+        constexpr uptr DebugUtils_TypeInfo                    = 0x81CE660; // TypeDef 5773
+        constexpr uptr Application_TypeInfo                   = 0x819AE08; // TypeDef 16976
+        constexpr uptr SceneManager_TypeInfo                  = 0x8189C88; // TypeDef 17463
+        constexpr uptr Debug_TypeInfo                          = 0x81CA1E0; // TypeDef 17013
+        constexpr uptr PlayerInputManager_TypeInfo            = 0x81FAE30; // TypeDef 21139
+        constexpr uptr CinemachineCore_TypeInfo               = 0x814FFC8; // TypeDef 29617
+        constexpr uptr CinemachineBrain_TypeInfo               = 0x814FC90; // TypeDef 29520
+        constexpr uptr MulticastDelegate_TypeInfo              = 0x817A128; // TypeDef 12315
+        constexpr uptr Delegate_TypeInfo                       = 0x81DCA40; // TypeDef 12294
 
         // --- descriptions (static instances -> pointer -> name) -------------
-        constexpr uptr PlayerRoleDescriptions_TypeInfo         = 0x81F9598; // TypeDef 1217
-        constexpr uptr PlayerRoleDescription_TypeInfo           = 0x81F9408; // TypeDef 2880
-        constexpr uptr BattleStanceDescription_TypeInfo        = 0x81C9CB8;
+        constexpr uptr PlayerRoleDescriptions_TypeInfo         = 0x81FE6F8; // TypeDef 1217
+        constexpr uptr PlayerRoleDescription_TypeInfo           = 0x81FE568; // TypeDef 2880
+        constexpr uptr BattleStanceDescription_TypeInfo        = 0x81CEDD0; // TypeDef 1240
         // PhysicsCharacterConfigs.Default static instance (body size fallback).
-        constexpr uptr PhysicsCharacterConfigs_TypeInfo        = 0x81DD9E0;
+        constexpr uptr PhysicsCharacterConfigs_TypeInfo        = 0x81E2AF8; // TypeDef 1061
     }
 
     // -------------------------------------------------------------------------
@@ -338,7 +338,7 @@ namespace robrun
         namespace Game
         {
             constexpr uptr Updaters              = 0x20;  // List<IUpdater>
-            constexpr uptr StartGameProcessor    = 0x98;  // was 0x90 before 2026-11-07 update
+            constexpr uptr StartGameProcessor    = 0x90;  // was 0x90 before 2026-11-07 update
         }
 
         namespace GlobalDebugUpdater
