@@ -89,6 +89,7 @@ namespace robrun
         int max_health = 0;
         bool dead = false;
         bool local = false;
+        bool in_vehicle = false;   // box synthesised from a seated character view
         bool group_member = false; // same party/group as local (best-effort)
         bool has_armor = false;
         bool knocked_out = false;
@@ -410,6 +411,25 @@ namespace robrun
         std::vector<loot_entity> loot_build;
         std::vector<vehicle_entity> vehicle_build;
         std::unordered_map<int, vec3> locker_build;
+
+        // Players seated in a vehicle leave the character dictionaries, so no
+        // chain is built and their box disappears. The rendered entity view
+        // usually survives (the game keeps drawing the seated rig), and its
+        // root transform gives a position the box can follow.
+        struct vehview_state
+        {
+            vec3 pos{};
+            std::uint64_t tick = 0;       // last successful resolve
+            std::uint64_t last_try = 0;   // last resolve attempt (success or not)
+            int fail_stage = -1;          // last resolve_uskel gate that rejected
+            std::uint64_t fail_tick = 0;
+        };
+        std::unordered_map<int, vehview_state> vehview;
+        // Entity id -> (name, role label) remembered from before the player
+        // got in, so the seated box keeps its label.
+        std::unordered_map<int, std::pair<std::string, std::string>> known_ident;
+        int vehview_boxes = 0;            // seated boxes in the current refresh
+        std::uint64_t vehview_log_tick = 0;
 
         // Last refresh source counts (for the log status line). The master
         // BattleEntitiesModel dictionary can be fully populated while the world
@@ -834,6 +854,10 @@ namespace robrun
         loot_build.clear();
         vehicle_build.clear();
         locker_build.clear();
+        vehview.clear();
+        known_ident.clear();
+        vehview_boxes = 0;
+        vehview_log_tick = 0;
         party_ids.clear();
         scan_stage = 0;
         scan_skip = 0;
@@ -2948,15 +2972,29 @@ namespace robrun
         }
 
         std::array<std::uintptr_t, kUslots> slots{};
+        // Source tag per slot, for the diagnostics dump (root / torso / head
+        // manual-control / IK chain number).
+        std::array<std::string, kUslots> slot_src{};
         int nslots = 0;
-        auto push_slot = [&](std::uintptr_t t)
+        auto push_slot = [&](std::uintptr_t t, const char* src)
         {
             if (!obj_ptr(t) || nslots >= kUslots) return;
             for (int i = 0; i < nslots; ++i)
                 if (slots[i] == t) return; // duplicate transform -> stray/third limb
+            slot_src[nslots] = src;
             slots[nslots++] = t;
         };
-        for (int i = 0; i < 7; ++i) push_slot(tf[i]);
+        for (int i = 0; i < 4; ++i)
+        {
+            static const char* tf_src[7] = {
+                "root", "torso0", "spine2", "spine3", "hSpine", "hNeck", "hHead"
+            };
+            push_slot(tf[i], tf_src[i]);
+        }
+        // CharacterHeadManualControlView (tf[4..6]) is an aim rig: when the
+        // player aims, its transforms move to the aim point instead of the
+        // head, which drew the long spike out of the box. The real neck/head
+        // bones come from the NeckIK chain below.
         // Adaptation behaviours (spine/neck/head) duplicate rig bones, and when
         // their transforms differ they add a floating center line through the
         // body. The real bones above already cover those segments.
@@ -2967,7 +3005,12 @@ namespace robrun
             int n = hdrs[i].len;
             if (n <= 0) continue;
             if (n > kMaxArrayBones) n = kMaxArrayBones;
-            for (int k = 0; k < n; ++k) push_slot(hdrs[i].refs[k]);
+            for (int k = 0; k < n; ++k)
+            {
+                char tag[12]{};
+                std::snprintf(tag, sizeof(tag), "ik%d.%d", i, k);
+                push_slot(hdrs[i].refs[k], tag);
+            }
         }
         if (nslots < 4) return fail(2);
 
@@ -3145,12 +3188,39 @@ namespace robrun
         b.bound = true;
         b.resolve_tick = GetTickCount64();
 
+        // Diagnostics: full world-space layout of one bound rig every 10 s.
+        // Tells which slot draws a stray line (root / torso / head manual
+        // control / a specific IK chain).
+        if (cfg.verbose)
+        {
+            static std::uint64_t s_pose_tick = 0;
+            const std::uint64_t pt = GetTickCount64();
+            if (pt - s_pose_tick >= 10000ull)
+            {
+                s_pose_tick = pt;
+                ROBRUN_LOG("[robrun] uskel pose view=0x" << std::hex << view
+                        << std::dec << " slots=" << b.slots
+                        << " root=(" << b.root_pos.x << "," << b.root_pos.y
+                        << "," << b.root_pos.z << ")"
+                        << " pos=(" << epos.x << "," << epos.y << "," << epos.z << ")");
+                for (int i = 0; i < b.slots; ++i)
+                {
+                    const vec3 rel = b.bones[static_cast<std::size_t>(i)] - b.root_pos;
+                    ROBRUN_LOG("    [" << i << "] " << slot_src[static_cast<std::size_t>(i)]
+                            << " rel=(" << rel.x << "," << rel.y << "," << rel.z << ")"
+                            << " par=" << b.bone_parent[static_cast<std::size_t>(i)]
+                            << (b.bones[static_cast<std::size_t>(i)].zero() ? " DROP" : ""));
+                }
+            }
+        }
+
         if (cfg.verbose)
         {
             ROBRUN_LOG("[robrun] uskel bind view=0x" << std::hex << view
                     << std::dec << " slots=" << b.slots
                     << " span=" << (b.hi - b.lo + 1)
                     << " lo=" << b.lo
+                    << " anchor=" << b.dbg_anchor
                     << " root=(" << b.root_pos.x << "," << b.root_pos.y
                     << "," << b.root_pos.z << ")"
                     << " pos=(" << epos.x << "," << epos.y << "," << epos.z << ")");
@@ -3507,6 +3577,17 @@ namespace robrun
                                 recovered = true;
                                 break;
                             }
+                        }
+                        // Last resort: the rig itself is the truth. A player
+                        // sitting in a vehicle keeps its view root at the seat
+                        // while the character model position is the old
+                        // standing spot, so the bones fail the proximity gate
+                        // and the box would be drawn empty.
+                        if (!recovered && b.root_pos.y < 5000.f
+                            && resolve_uskel(view, b.root_pos, b))
+                        {
+                            epos = b.root_pos;
+                            recovered = true;
                         }
                     }
                     if (recovered)
@@ -4697,6 +4778,31 @@ namespace robrun
                         // different position. The rig does not belong to this
                         // body; let the copy that matches it draw the skeleton.
                         ++ent_skel_far;
+                        // A player sitting in a vehicle keeps the view root at
+                        // the seat while the model position is still the old
+                        // standing spot. The rig is what is being rendered, so
+                        // move the box onto it instead of drawing an empty box
+                        // in the wrong place.
+                        if (b.root_pos.y < 5000.f && pos.distance(b.root_pos) < 80.f)
+                        {
+                            const float dy = b.root_pos.y - pos.y;
+                            pos = b.root_pos;
+                            e.pos = pos;
+                            e.box_bottom += dy;
+                            e.box_top += dy;
+                            for (int k = 0; k < n; ++k)
+                            {
+                                const vec3 p = b.bones[static_cast<std::size_t>(k)];
+                                if (p.finite() && !p.zero()) e.bones[static_cast<std::size_t>(k)] = p;
+                                e.bone_parent[static_cast<std::size_t>(k)] =
+                                    b.bone_parent[static_cast<std::size_t>(k)];
+                            }
+                            e.bone_count = n;
+                            e.bone_root = -1;
+                            e.skeleton_anchor = vec3{ pos.x, e.box_bottom, pos.z };
+                            e.skeleton_valid = true;
+                            used_unity = true;
+                        }
                     }
                     else
                     {
@@ -4744,6 +4850,105 @@ namespace robrun
             }
         }
 
+        // ---- players seated in vehicles ------------------------------------
+        // A player getting into a car leaves the character dictionaries, so no
+        // chain is built and the box vanishes. The entity-view map is keyed by
+        // entity id and survives that move (the seated rig is still rendered),
+        // so synthesise a box from the view root for ids that have no model.
+        vehview_boxes = 0;
+        {
+            refresh_view_map(now_tick);
+
+            std::unordered_set<int> have_ids;
+            have_ids.reserve(entities.size());
+            for (const auto& e : entities) have_ids.insert(e.id);
+
+            for (const auto& kv : view_by_id)
+            {
+                const int id = kv.first;
+                const std::uintptr_t view = kv.second;
+                if (id <= 0 || !obj_ptr(view) || have_ids.count(id)) continue;
+
+                vehview_state& st = vehview[id];
+                const std::uint64_t backoff = st.fail_stage == 10 ? 10000ull : 3000ull;
+                const bool retry = st.fail_tick == 0 ||
+                    now_tick - st.fail_tick >= backoff;
+                // Rate-limit by the attempt timestamp, not the success
+                // timestamp: an id whose entity flickers in and out of the
+                // model list would otherwise re-resolve on every refresh.
+                if (retry && now_tick - st.last_try >= 120ull)
+                {
+                    st.last_try = now_tick;
+                    uskel_view vib;
+                    if (resolve_uskel(view, st.pos, vib)
+                        && vib.valid && vib.root_pos.finite() && !vib.root_pos.zero())
+                    {
+                        st.pos = vib.root_pos;
+                        st.tick = now_tick;
+                        st.fail_stage = -1;
+                        st.fail_tick = 0;
+                    }
+                    else
+                    {
+                        st.fail_stage = vib.fail_stage;
+                        st.fail_tick = now_tick;
+                    }
+                }
+                if (!st.pos.finite() || st.pos.zero() || st.pos.y > 5000.f) continue;
+
+                entity e;
+                e.model = view;      // unique + stable, so sort/unique keeps it
+                e.id = id;
+                const auto kit = known_ident.find(id);
+                if (kit != known_ident.end())
+                {
+                    e.name = kit->second.first;
+                    e.role_label = kit->second.second;
+                }
+                if (e.name.empty()) e.name = "Player";
+                e.pos = st.pos;
+                // root_pos is the capsule anchor the game moves, i.e. mid body.
+                e.box_bottom = st.pos.y - 0.9f;
+                e.box_top = e.box_bottom + 1.8f;
+                e.height = 1.8f;
+                e.width = 0.8f;
+                e.box_bounds_valid = true;
+                e.box_anchored = true;
+                e.in_vehicle = true;
+                entities.push_back(std::move(e));
+                ++vehview_boxes;
+            }
+
+            // Keep the cached position when the player is visible again (the
+            // box switches back to the real entity), but drop state for views
+            // that no longer exist so the map cannot grow forever.
+            for (auto it = vehview.begin(); it != vehview.end(); )
+            {
+                const bool view_alive = view_by_id.count(it->first) != 0;
+                const bool entity_alive = have_ids.count(it->first) != 0;
+                if (!view_alive && !entity_alive
+                    && now_tick - it->second.last_try > 30000ull)
+                    it = vehview.erase(it);
+                else ++it;
+            }
+
+            if (cfg.verbose && vehview_boxes > 0
+                && now_tick - vehview_log_tick >= 3000ull)
+            {
+                vehview_log_tick = now_tick;
+                int announced = 0;
+                for (const auto& e : entities)
+                {
+                    if (!e.in_vehicle) continue;
+                    if (announced++ >= 4) break;
+                    ROBRUN_LOG("[robrun] vehview id=" << e.id
+                            << " name=" << e.name
+                            << " pos=(" << e.pos.x << "," << e.pos.y << "," << e.pos.z << ")"
+                            << " boxes=" << vehview_boxes);
+                }
+            }
+        }
+
         // Characters that were drawn last refresh but are gone now. A player
         // getting into a vehicle is the usual reason; the log names the id so
         // we can see whether the model/view/position or the draw filter lost
@@ -4774,7 +4979,9 @@ namespace robrun
                 auto& slot = last_entity_ids[e.id];
                 slot.first = e.name;
                 if (slot.second == 0) slot.second = now_tick;
+                if (!e.name.empty()) known_ident[e.id] = { e.name, e.role_label };
             }
+            if (known_ident.size() > 1024) known_ident.clear();
         }
 
         std::sort(entities.begin(), entities.end(),
@@ -5016,6 +5223,57 @@ namespace robrun
             vehicle_build.push_back(std::move(v));
         };
 
+        // Diagnostic: dump one car's seat occupancy so the entity-id -> car
+        // mapping can be verified against live DMA. Once per 5 s, one car.
+        auto probe_seats = [&](std::uintptr_t car)
+        {
+            if (!cfg.verbose) return;
+            static std::uint64_t s_tick = 0;
+            const std::uint64_t t = GetTickCount64();
+            if (t - s_tick < 5000ull) return;
+            // Rotate through the car list: only one probe per 5 s window, and
+            // the window index selects which car so every car is sampled.
+            if (((static_cast<std::uint64_t>(car) >> 4) + t / 5000ull) % 6ull != 0ull)
+                return;
+            s_tick = t;
+
+            const std::int32_t car_id = read_t<std::int32_t>(car + off::CarModel::Id);
+            const std::uintptr_t seats = read_ptr(car + off::CarModel::Seats);
+            if (!obj_ptr(seats))
+            {
+                ROBRUN_LOG("[robrun] vehseat car=0x" << std::hex << car << std::dec
+                        << " id=" << car_id << " seats-model=0");
+                return;
+            }
+            const std::uintptr_t data = read_ptr(seats + off::VehicleSeatsModel::Data);
+            const std::uintptr_t items = obj_ptr(data)
+                ? read_ptr(data + off::ReferenceMapData::Items) : 0;
+            const std::uintptr_t arr = obj_ptr(items)
+                ? read_ptr(items + il2cpp::List_Items) : 0;
+            const std::int32_t n = obj_ptr(items)
+                ? read_t<std::int32_t>(items + il2cpp::List_Size) : 0;
+
+            ROBRUN_LOG("[robrun] vehseat car=0x" << std::hex << car << std::dec
+                    << " id=" << car_id << " seats-model=1 data=0x" << std::hex << data
+                    << " items=0x" << items << " arr=0x" << arr << std::dec
+                    << " n=" << n);
+
+            if (!obj_ptr(arr) || n <= 0) return;
+            const int probe = (std::min)(n, 8);
+            for (int i = 0; i < probe; ++i)
+            {
+                const std::uintptr_t seat = read_ptr(arr + il2cpp::Array_Data
+                                                     + static_cast<std::uintptr_t>(i) * 8);
+                if (!obj_ptr(seat)) continue;
+                bool occ = false;
+                std::int32_t eid = -1;
+                prim_bool(read_ptr(seat + off::VehicleSeatData::Occupied), occ);
+                prim_int(read_ptr(seat + off::VehicleSeatData::EntityId), eid);
+                ROBRUN_LOG("[robrun] vehseat  seat=" << i << " seat=0x" << std::hex << seat
+                        << std::dec << " occ=" << (occ ? 1 : 0) << " entity=" << eid);
+            }
+        };
+
         const int taken_before = taken;
         switch (scan_stage)
         {
@@ -5106,6 +5364,7 @@ namespace robrun
                         off::CarModel::Transform, off::CarModel::LinearVelocity,
                         off::CarModel::OwnerRole, off::CarModel::Description,
                         off::CarModel::Siren);
+                    probe_seats(car);
                 }, 128);
             break;
         case 6:

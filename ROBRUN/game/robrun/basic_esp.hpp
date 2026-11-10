@@ -802,13 +802,14 @@ namespace robrun
                 ? read_ptr(bmw + off::WorldEntitiesModel::BattleCharacters) : 0;
 
             int pos_bad = 0, bounds_ok = 0, ground_ok = 0, local_seen = 0;
-            int skel_ok = 0, bones_total = 0;
+            int skel_ok = 0, bones_total = 0, veh_boxes = 0;
             for (const auto& e : w.entities)
             {
                 if (!e.pos.finite() || e.pos.zero()) ++pos_bad;
                 if (e.box_bounds_valid) ++bounds_ok;
                 if (e.ground_found) ++ground_ok;
                 if (e.local) ++local_seen;
+                if (e.in_vehicle) ++veh_boxes;
                 if (e.skeleton_valid)
                 {
                     ++skel_ok;
@@ -851,7 +852,8 @@ namespace robrun
                     << " posBad=" << pos_bad << " boundsOk=" << bounds_ok
                     << " groundOk=" << ground_ok << " local=" << local_seen
                     << " skelOk=" << skel_ok << " bones=" << bones_total
-                    << " skelFar=" << w.ent_skel_far);
+                    << " skelFar=" << w.ent_skel_far
+                    << " vehBox=" << veh_boxes);
             w.update_ms_peak = 0.0;
             w.update_ms_sum = 0.0;
             w.update_count = 0;
@@ -1208,10 +1210,14 @@ namespace robrun
                     // ---- status dots -----------------------------------
                     if (e.sprinting || e.armed)
                     {
-                        const float r = (std::max)(1.5f, box_w * 0.09f);
-                        const ImVec2 c(left + r + 1.f, bottom - r - 1.f);
+                        // Was sized as a fraction of the box width, which
+                        // turned into a huge blob on close players. Cap it so
+                        // it stays a small indicator at any distance.
+                        const float r = (std::min)((std::max)(1.5f, box_w * 0.09f), 3.2f);
+                        const ImVec2 c(left + r + 2.f, bottom - r - 2.f);
                         dl->AddCircleFilled(c, r, e.armed ? esp_col::rgba(255, 200, 60)
                                                           : esp_col::rgba(120, 220, 255));
+                        dl->AddCircle(c, r, esp_col::rgba(0, 0, 0, 190), 0, 1.2f);
                     }
                 }
             }

@@ -289,7 +289,29 @@ namespace robrun
             constexpr uptr Description            = 0x78;
             constexpr uptr Transform              = 0xC0;
             constexpr uptr LinearVelocity         = 0xC8;
+            constexpr uptr Seats                  = 0xE0; // VehicleSeatsModel
             constexpr uptr Siren                  = 0x1D0; // CarSirenModel
+            constexpr uptr Id                     = 0x10; // int32
+        }
+
+        // VehicleSeatsModel -> ReferenceMapData<VehicleSeatSlotDescription,
+        // VehicleSeatData>. The generic map is declared keys/items/enum in that
+        // order after the 0x10 object header.
+        namespace VehicleSeatsModel
+        {
+            constexpr uptr Data                   = 0x10; // ReferenceMapData
+        }
+
+        namespace ReferenceMapData
+        {
+            constexpr uptr Keys                   = 0x10; // List<string>
+            constexpr uptr Items                  = 0x18; // List<TValue>
+        }
+
+        namespace VehicleSeatData
+        {
+            constexpr uptr Occupied               = 0x20; // IPrimitiveData<bool>
+            constexpr uptr EntityId               = 0x28; // IPrimitiveData<int>
         }
 
         namespace HelicopterModel
